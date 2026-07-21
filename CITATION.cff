@@ -1,9 +1,12 @@
 cff-version: 1.2.0
-title: "Environmental Machine Learning: From Estuary Observations to Climate Prediction"
+title: "enviroML: Environmental Machine Learning from Estuary Observations to Climate Prediction"
 message: "If you use this software, please cite it using this metadata."
 type: software
+version: 1.0.0
+date-released: 2026-07-21
 authors:
   - family-names: Tahmid
     given-names: Muhammad Taky
 year: 2026
 license: MIT
+repository-code: "https://github.com/takyurp09/enviroML"

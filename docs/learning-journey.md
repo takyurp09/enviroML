@@ -8,7 +8,7 @@
 
 **Student:** Muhammad Taky Tahmid
 
-The original course used sequential assignments. This portfolio presents them as stages of a single environmental-ML workflow rather than ten disconnected submissions.
+The original course used sequential assignments. This project presents them as stages of a single environmental-ML workflow rather than ten disconnected submissions.
 
 | Stage | Original assignment title | Core skill | Portfolio role |
 |---:|---|---|---|

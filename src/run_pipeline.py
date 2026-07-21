@@ -1,13 +1,12 @@
-"""Reproducible portfolio pipeline for MAST 638 environmental ML coursework."""
+"""Reproducible enviroML pipeline for environmental ML case studies."""
 from pathlib import Path
 import json, warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
-from sklearn.compose import TransformedTargetRegressor
 from sklearn.ensemble import (GradientBoostingClassifier, RandomForestClassifier,
-                              RandomForestRegressor, VotingClassifier)
+                              RandomForestRegressor)
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
@@ -17,7 +16,7 @@ from sklearn.metrics import (ConfusionMatrixDisplay, accuracy_score, adjusted_ra
 from sklearn.model_selection import (GridSearchCV, RepeatedStratifiedKFold,
                                      cross_validate, train_test_split)
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -163,7 +162,7 @@ def main():
     style(); d=load_estuary(); eda(d)
     summary={"records":len(d),"stations":d.station.nunique(),"regression":regression(d),
              "classification":classification(d),"clustering":clustering(d),"climate":climate()}
-    (TAB/"portfolio_summary.json").write_text(json.dumps(summary,indent=2,default=float))
+    (TAB/"project_summary.json").write_text(json.dumps(summary,indent=2,default=float))
     print(json.dumps(summary,indent=2,default=float))
 
 if __name__ == "__main__": main()

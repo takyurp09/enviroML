@@ -1,5 +1,6 @@
-numpy>=1.26
-pandas>=2.1
-matplotlib>=3.8
-scipy>=1.11
-scikit-learn>=1.4
+# Tested runtime environment (Python 3.11)
+numpy==2.4.6
+pandas==2.3.3
+matplotlib==3.10.8
+scipy==1.16.3
+scikit-learn==1.8.0
