@@ -2,6 +2,8 @@
 
 Raw inputs are intentionally excluded from the public repository because the archived course materials do not contain complete redistribution terms.
 
+`station_coordinates.csv` is included as non-sensitive metadata derived from the course-provided `DE_stations.mat`. It records the 22 monitoring-station locations used in the network map.
+
 To reproduce the analyses locally, place the following inputs under `data/raw/`:
 
 ```text

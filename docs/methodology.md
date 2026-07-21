@@ -20,11 +20,15 @@ Permutation importance is computed on held-out data, not training data. It there
 
 Station-level medians summarize multivariate water quality. Variables are standardized before K-means. Candidate solutions from k=2 through k=6 are compared by silhouette score. Robustness is assessed through 200 feature-bootstrap refits and summarized with the adjusted Rand index (ARI), which measures agreement while correcting for chance.
 
+## Spatial and temporal robustness
+
+The chlorophyll random forest is refitted in five grouped folds, with all observations from each held-out station excluded from training. A second design trains on observations through 2016 and evaluates only later years. The temporal RMSE receives a nonparametric 95% confidence interval from 1,000 test-set bootstrap resamples. Residuals are also summarized by season to reveal systematic error heterogeneity.
+
 ## Climate prediction
 
 The ERA5 case study predicts 2 m temperature from wind components, evaporation, solar radiation, surface pressure, precipitation, and cyclic hour/day-of-year encodings. Because observations are temporal, the first 75% of the series trains the models and the final 25% is held out. This chronological design is stricter—and more realistic—than randomly mixing past and future records.
 
-The dense sub-daily grid is regularly thinned by a factor of four for portable runtime while preserving temporal order. Seasonal ridge and random forest models are compared by MAE, RMSE, and R².
+Seasonal ridge and histogram gradient boosting are compared with persistence and monthly-hour climatology baselines using MAE, RMSE, and R². Expanding-window time-series validation adds five sequential folds. Held-out errors are aggregated by grid cell to map spatial variation in predictive performance.
 
 ## Reproducibility
 

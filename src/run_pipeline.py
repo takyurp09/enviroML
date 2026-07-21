@@ -6,15 +6,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.ensemble import (GradientBoostingClassifier, RandomForestClassifier,
-                              RandomForestRegressor)
+                              RandomForestRegressor, VotingClassifier, VotingRegressor,
+                              HistGradientBoostingRegressor)
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import (ConfusionMatrixDisplay, accuracy_score, adjusted_rand_score,
                              balanced_accuracy_score, mean_absolute_error,
                              mean_squared_error, r2_score, silhouette_score)
-from sklearn.model_selection import (GridSearchCV, RepeatedStratifiedKFold,
-                                     cross_validate, train_test_split)
+from sklearn.model_selection import (GridSearchCV, GroupKFold, RepeatedStratifiedKFold,
+                                     TimeSeriesSplit, cross_validate, train_test_split)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -84,6 +85,9 @@ def regression(d):
     for name,m in models.items():
         m.fit(Xtr,ytr); p=m.predict(Xte); preds[name]=p
         rows.append({"model":name,"MAE":mean_absolute_error(yte,p),"RMSE":mean_squared_error(yte,p)**.5,"R2":r2_score(yte,p)})
+    ensemble=VotingRegressor([("ridge",models["Ridge"]),("rf",models["Random forest"])])
+    ensemble.fit(Xtr,ytr); p=ensemble.predict(Xte); preds["Voting ensemble"]=p
+    rows.append({"model":"Voting ensemble","MAE":mean_absolute_error(yte,p),"RMSE":mean_squared_error(yte,p)**.5,"R2":r2_score(yte,p)})
     out=pd.DataFrame(rows).sort_values("RMSE"); out.to_csv(TAB/"02_regression_comparison.csv",index=False)
     best=out.iloc[0].model; p=preds[best]
     fig,ax=plt.subplots(figsize=(5.4,5)); ax.scatter(yte,p,s=16,alpha=.45,color="#087e8b",edgecolor="none")
@@ -104,6 +108,9 @@ def classification(d):
       "Tuned SVM":svc,
       "Random forest":Pipeline([("imp",SimpleImputer()),("m",RandomForestClassifier(n_estimators=350,min_samples_leaf=3,class_weight="balanced",random_state=SEED,n_jobs=1))]),
       "Gradient boosting":Pipeline([("imp",SimpleImputer()),("m",GradientBoostingClassifier(random_state=SEED))])}
+    candidates["Soft-voting ensemble"]=VotingClassifier(
+        [("logistic",candidates["Logistic"]),("svm",Pipeline(prep+[("m",SVC(C=10,gamma="scale",probability=True,class_weight="balanced",random_state=SEED))])),("rf",candidates["Random forest"])],
+        voting="soft")
     cv=RepeatedStratifiedKFold(n_splits=5,n_repeats=2,random_state=SEED); rows=[]
     for name,m in candidates.items():
         sc=cross_validate(m,Xtr,ytr,cv=cv,scoring=["accuracy","balanced_accuracy"],n_jobs=1)
@@ -122,6 +129,42 @@ def classification(d):
     ax.set(xlabel="Decrease in held-out balanced accuracy",title="Random-forest permutation importance"); ax.grid(axis="x")
     fig.tight_layout(); fig.savefig(FIG/"04_feature_importance.png"); plt.close(fig)
     return out.iloc[0].to_dict()
+
+def robust_validation(d):
+    """Spatial/temporal validation, uncertainty intervals, and subgroup errors."""
+    z=d[d.chlora_value.notna()].copy(); X=z[FEATURES]; y=z.chlora_value; groups=z.station
+    rf=Pipeline([("imp",SimpleImputer()),("m",RandomForestRegressor(n_estimators=200,min_samples_leaf=4,random_state=SEED,n_jobs=1))])
+    rows=[]; residual_parts=[]
+    for fold,(tr,te) in enumerate(GroupKFold(5).split(X,y,groups),1):
+        rf.fit(X.iloc[tr],y.iloc[tr]); p=rf.predict(X.iloc[te]); e=y.iloc[te]-p
+        rows.append({"design":"station-held-out","fold":fold,"n_test":len(te),"RMSE":mean_squared_error(y.iloc[te],p)**.5,"MAE":mean_absolute_error(y.iloc[te],p),"R2":r2_score(y.iloc[te],p)})
+        residual_parts.append(pd.DataFrame({"station":z.station.iloc[te],"timestamp":z.timestamp.iloc[te],"observed":y.iloc[te],"predicted":p,"residual":e}))
+    years=sorted(z.timestamp.dt.year.dropna().unique()); cutoff=years[int(.70*len(years))-1]
+    tr=z.timestamp.dt.year<=cutoff; te=z.timestamp.dt.year>cutoff; rf.fit(X[tr],y[tr]); p=rf.predict(X[te]); e=y[te]-p
+    rows.append({"design":f"temporal: <= {cutoff} vs > {cutoff}","fold":1,"n_test":int(te.sum()),"RMSE":mean_squared_error(y[te],p)**.5,"MAE":mean_absolute_error(y[te],p),"R2":r2_score(y[te],p)})
+    residual_parts.append(pd.DataFrame({"station":z.station[te],"timestamp":z.timestamp[te],"observed":y[te],"predicted":p,"residual":e}))
+    pd.DataFrame(rows).to_csv(TAB/"08_spatiotemporal_validation.csv",index=False)
+    res=pd.concat(residual_parts,ignore_index=True); res["absolute_error"]=res.residual.abs(); res["season"]=pd.cut(res.timestamp.dt.month,[0,2,5,8,11,12],labels=["Winter","Spring","Summer","Autumn","Winter2"]); res["season"]=res.season.astype(str).replace("Winter2","Winter")
+    by_season=res.groupby("season",as_index=False).agg(n=("residual","size"),MAE=("absolute_error","mean"),bias=("residual","mean")); by_season.to_csv(TAB/"09_error_by_season.csv",index=False)
+    rng=np.random.default_rng(SEED); vals=[]; obs=y[te].to_numpy(); pred=p
+    for _ in range(1000):
+        ix=rng.integers(0,len(obs),len(obs)); vals.append(mean_squared_error(obs[ix],pred[ix])**.5)
+    ci=pd.DataFrame({"metric":["temporal_test_RMSE"],"estimate":[mean_squared_error(obs,pred)**.5],"lower_95":[np.quantile(vals,.025)],"upper_95":[np.quantile(vals,.975)],"bootstrap_reps":[1000]}); ci.to_csv(TAB/"10_uncertainty_intervals.csv",index=False)
+    fig,axs=plt.subplots(1,2,figsize=(10,4)); spatial=pd.DataFrame(rows[:5]); axs[0].bar(spatial.fold,spatial.RMSE,color="#087e8b"); axs[0].axhline(spatial.RMSE.mean(),ls="--",color="#f97316"); axs[0].set(xlabel="Held-out station fold",ylabel="RMSE (µg/L)",title="Generalization to unseen stations")
+    axs[1].bar(by_season.season,by_season.MAE,color="#315c7d"); axs[1].set(xlabel="Season",ylabel="MAE (µg/L)",title="Error analysis by season");
+    for ax in axs: ax.grid(axis="y"); fig.tight_layout(); fig.savefig(FIG/"07_spatiotemporal_validation.png"); plt.close(fig)
+    return {"station_cv_RMSE_mean":float(spatial.RMSE.mean()),"temporal_RMSE":float(rows[-1]["RMSE"]),"temporal_RMSE_CI":[float(ci.lower_95.iloc[0]),float(ci.upper_95.iloc[0])]}
+
+def station_map(d):
+    coords=pd.read_csv(ROOT/"data/station_coordinates.csv",dtype={"station":str}); stats=d.groupby("station",as_index=False).agg(median_chla=("chlora_value","median"),n=("chlora_value","count")); m=coords.merge(stats,on="station",how="left"); m["region"]=m.station.map(REGIONS).fillna("Upper River")
+    m.to_csv(TAB/"11_station_map_data.csv",index=False); colors={"Bay":"#0077b6","Transitional":"#7b2cbf","Estuarine Turbidity Maximum":"#f97316","Upper River":"#2a9d8f"}
+    fig,ax=plt.subplots(figsize=(7.4,8)); ax.plot(m.longitude,m.latitude,color="#8ecae6",lw=7,alpha=.28,zorder=1)
+    for region,g in m.groupby("region"):
+        s=40+5*np.sqrt(g.n.fillna(0)); ax.scatter(g.longitude,g.latitude,s=s,c=colors[region],label=region,edgecolor="white",linewidth=.8,zorder=3)
+    for i,(_,r) in enumerate(m.iterrows()): ax.annotate(r.station,(r.longitude,r.latitude),xytext=(5,4 if i%2 else -5),textcoords="offset points",fontsize=7,va="center")
+    ax.set(xlabel="Longitude",ylabel="Latitude",title="Delaware Estuary water-quality monitoring network"); ax.legend(frameon=True,framealpha=.92,title="Course-defined region",loc="upper left",fontsize=8); ax.grid(); ax.set_aspect(1/np.cos(np.deg2rad(m.latitude.mean())))
+    fig.tight_layout(); fig.savefig(FIG/"08_station_network_map.png"); plt.close(fig)
+
 
 def clustering(d):
     station=d.groupby("station")[FEATURES+["chlora_value"]].median().dropna(thresh=5)
@@ -144,24 +187,35 @@ def climate():
     f=ROOT/"data/raw/climate/era5_bangladesh_2000.csv"; d=pd.read_csv(f); d["time"]=pd.to_datetime(d.time)
     d=d.sort_values("time"); d["hour_sin"]=np.sin(2*np.pi*d.time.dt.hour/24); d["hour_cos"]=np.cos(2*np.pi*d.time.dt.hour/24)
     d["doy_sin"]=np.sin(2*np.pi*d.time.dt.dayofyear/366); d["doy_cos"]=np.cos(2*np.pi*d.time.dt.dayofyear/366)
-    feats=[c for c in ["u10","v10","e","ssr","sp","tp","hour_sin","hour_cos","doy_sin","doy_cos"] if c in d]
-    d=d.dropna(subset=feats+["t2m"])
-    # Preserve chronology while thinning a dense sub-daily grid for portable runtime.
-    d=d.iloc[::4].copy(); split=int(.75*len(d)); Xtr,Xte=d[feats].iloc[:split],d[feats].iloc[split:]; ytr=d.t2m.iloc[:split]-273.15; yte=d.t2m.iloc[split:]-273.15
+    feats=[c for c in ["longitude","latitude","u10","v10","e","ssr","sp","tp","hour_sin","hour_cos","doy_sin","doy_cos"] if c in d]
+    d=d.dropna(subset=feats+["t2m"]).sort_values(["time","latitude","longitude"]); times=np.sort(d.time.unique()); cut=times[int(.75*len(times))]; tr=d.time<cut; te=~tr; Xtr,Xte=d.loc[tr,feats],d.loc[te,feats]; ytr=d.loc[tr,"t2m"]-273.15; yte=d.loc[te,"t2m"]-273.15
     models={"Seasonal linear":Pipeline([("imp",SimpleImputer()),("scale",StandardScaler()),("m",Ridge(alpha=1))]),
-            "Random forest":Pipeline([("imp",SimpleImputer()),("m",RandomForestRegressor(n_estimators=30,min_samples_leaf=6,max_depth=16,max_features=.8,random_state=SEED,n_jobs=1))])}
+            "Histogram gradient boosting":Pipeline([("imp",SimpleImputer()),("m",HistGradientBoostingRegressor(max_iter=150,l2_regularization=1,random_state=SEED))])}
     rows=[]; preds={}
     for n,m in models.items(): m.fit(Xtr,ytr); p=m.predict(Xte); preds[n]=p; rows.append({"model":n,"MAE_C":mean_absolute_error(yte,p),"RMSE_C":mean_squared_error(yte,p)**.5,"R2":r2_score(yte,p)})
+    train=d.loc[tr].copy(); test=d.loc[te].copy(); train["temp_C"]=ytr.values; climatology=train.groupby([train.time.dt.month,train.time.dt.hour]).temp_C.mean(); keys=list(zip(test.time.dt.month,test.time.dt.hour)); cp=np.array([climatology.get(k,ytr.mean()) for k in keys]); rows.append({"model":"Monthly-hour climatology","MAE_C":mean_absolute_error(yte,cp),"RMSE_C":mean_squared_error(yte,cp)**.5,"R2":r2_score(yte,cp)}); preds["Monthly-hour climatology"]=cp
+    d["persistence_C"]=d.groupby(["longitude","latitude"]).t2m.shift(1)-273.15; pp=d.loc[te,"persistence_C"]; ok=pp.notna(); rows.append({"model":"Persistence baseline","MAE_C":mean_absolute_error(yte[ok],pp[ok]),"RMSE_C":mean_squared_error(yte[ok],pp[ok])**.5,"R2":r2_score(yte[ok],pp[ok])}); preds["Persistence baseline"]=pp.to_numpy()
     out=pd.DataFrame(rows).sort_values("RMSE_C"); out.to_csv(TAB/"07_climate_time_split.csv",index=False); best=out.iloc[0].model
-    fig,ax=plt.subplots(figsize=(10,4)); ix=d.time.iloc[split:]; ax.plot(ix,yte.values,color="#94a3b8",lw=.8,label="ERA5 observed"); ax.plot(ix,preds[best],color="#087e8b",lw=.8,label=best)
+    # Plot the spatial mean to keep the dense grid legible.
+    plot=pd.DataFrame({"time":test.time.values,"observed":yte.values,"predicted":preds[best]}).groupby("time",as_index=False).mean()
+    fig,ax=plt.subplots(figsize=(10,4)); ax.plot(plot.time,plot.observed,color="#94a3b8",lw=.9,label="ERA5 observed"); ax.plot(plot.time,plot.predicted,color="#087e8b",lw=.9,label=best)
     ax.set(xlabel="Held-out final quarter of 2000",ylabel="2 m temperature (°C)",title="Bangladesh temperature prediction with chronological validation"); ax.legend(frameon=False,ncol=2); ax.grid(axis="y")
     fig.tight_layout(); fig.savefig(FIG/"06_climate_time_validation.png"); plt.close(fig)
+    err=test[["longitude","latitude"]].copy(); err["sq_error"]=(yte.values-preds[best])**2; grid=err.groupby(["longitude","latitude"],as_index=False).sq_error.mean(); grid["RMSE_C"]=np.sqrt(grid.sq_error); grid.to_csv(TAB/"12_climate_spatial_error.csv",index=False)
+    fig,ax=plt.subplots(figsize=(7,5.5)); sc=ax.scatter(grid.longitude,grid.latitude,c=grid.RMSE_C,s=75,cmap="magma",marker="s"); fig.colorbar(sc,ax=ax,label="Held-out RMSE (°C)"); ax.set(xlabel="Longitude",ylabel="Latitude",title="Spatial distribution of Bangladesh prediction error"); ax.grid(); fig.tight_layout(); fig.savefig(FIG/"09_climate_error_map.png"); plt.close(fig)
+    # Expanding-window validation on spatially averaged time steps.
+    avg=d.groupby("time",as_index=False)[feats+["t2m"]].mean(); Xc=avg[feats]; yc=avg.t2m-273.15; cvrows=[]
+    for fold,(a,b) in enumerate(TimeSeriesSplit(5).split(Xc),1):
+        model=models["Seasonal linear"].fit(Xc.iloc[a],yc.iloc[a]); pr=model.predict(Xc.iloc[b]); cvrows.append({"fold":fold,"train_n":len(a),"test_n":len(b),"RMSE_C":mean_squared_error(yc.iloc[b],pr)**.5,"MAE_C":mean_absolute_error(yc.iloc[b],pr)})
+    pd.DataFrame(cvrows).to_csv(TAB/"13_climate_timeseries_cv.csv",index=False)
     return out.iloc[0].to_dict()
 
 def main():
     style(); d=load_estuary(); eda(d)
+    station_map(d)
     summary={"records":len(d),"stations":d.station.nunique(),"regression":regression(d),
-             "classification":classification(d),"clustering":clustering(d),"climate":climate()}
+             "classification":classification(d),"clustering":clustering(d),
+             "robust_validation":robust_validation(d),"climate":climate()}
     (TAB/"project_summary.json").write_text(json.dumps(summary,indent=2,default=float))
     print(json.dumps(summary,indent=2,default=float))
 
